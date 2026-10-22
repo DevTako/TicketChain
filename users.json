@@ -1,0 +1,12 @@
+[
+  {
+    "user": "ana",
+    "role": "analista",
+    "public_key": "d74bdc792c51d4f9a72a713711b4d89bde175fe7b17543ee762abf111acee566"
+  },
+  {
+    "user": "walter",
+    "role": "reportante",
+    "public_key": "8fc7db1244f5b83cf51dd37b4b885da5c8f696324803feff9523aa091ca9eed1"
+  }
+]

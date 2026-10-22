@@ -1,0 +1,11 @@
+/target
+keys/
+chain.json
+chain_v1_backup.json
+servidor.log
+*.tmp
+
+chain.json
+chain_v1_backup.json
+servidor.log
+*.tmp

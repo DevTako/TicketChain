@@ -1,0 +1,14 @@
+[package]
+name = "ticket_chain"
+version = "0.1.0"
+edition = "2021"
+default-run = "ticket_chain"
+
+[dependencies]
+sha2 = "0.10"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+eframe = "0.37"
+ed25519-dalek = "2"
+getrandom = "0.3"
