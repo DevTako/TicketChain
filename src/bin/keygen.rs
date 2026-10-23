@@ -1,11 +1,12 @@
 use std::fs;
 use ticket_chain::crypto::{generate_signing_key, public_key_hex, save_signing_key};
+use ticket_chain::paths;
 
 fn main() {
     let user = match std::env::args().nth(1) {
         Some(u) => u,
         None => {
-            eprintln!("Uso: cargo run --bin keygen -- <usuario>");
+            eprintln!("Uso: keygen <usuario>");
             std::process::exit(2);
         }
     };
@@ -20,12 +21,13 @@ fn main() {
         std::process::exit(2);
     }
 
-    if let Err(e) = fs::create_dir_all("keys") {
-        eprintln!("No se pudo crear la carpeta keys: {}", e);
+    let dir = paths::keys_dir();
+    if let Err(e) = fs::create_dir_all(&dir) {
+        eprintln!("No se pudo crear la carpeta keys ({}): {}", dir, e);
         std::process::exit(1);
     }
 
-    let path = format!("keys/{}.key", user);
+    let path = paths::key_path(&user);
     let signing_key = match generate_signing_key() {
         Ok(k) => k,
         Err(e) => {

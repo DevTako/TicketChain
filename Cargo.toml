@@ -2,7 +2,7 @@
 name = "ticket_chain"
 version = "0.1.0"
 edition = "2021"
-default-run = "ticket_chain"
+default-run = "TicketChain"
 
 [dependencies]
 sha2 = "0.10"
@@ -12,3 +12,14 @@ serde_json = "1"
 eframe = "0.37"
 ed25519-dalek = "2"
 getrandom = "0.3"
+
+[[bin]]
+name = "TicketChain"
+path = "src/bin/portal.rs"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -32,7 +32,7 @@ pub fn is_valid_nonce(s: &str) -> bool {
 
 // ---------- Roles y permisos ----------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     Reportante,
@@ -43,23 +43,30 @@ pub enum Role {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     Enviar,
+    Asignar,
+    Resolver,
     ListarTodo,
     Validar,
+    CrearUsuario,
+    ListarUsuarios,
 }
 
 // La matriz de permisos. Un solo lugar, fácil de auditar.
 pub fn can(role: Role, action: Action) -> bool {
     match (role, action) {
         (_, Action::Enviar) => true,
-        (Role::Analista | Role::Admin, Action::ListarTodo) => true,
-        (Role::Analista | Role::Admin, Action::Validar) => true,
+        (
+            Role::Analista | Role::Admin,
+            Action::Asignar | Action::Resolver | Action::ListarTodo | Action::Validar,
+        ) => true,
+        (Role::Admin, Action::CrearUsuario | Action::ListarUsuarios) => true,
         _ => false,
     }
 }
 
 // ---------- Registro de usuarios ----------
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
     pub user: String,
     pub role: Role,
@@ -106,6 +113,40 @@ impl Registry {
 
     pub fn len(&self) -> usize {
         self.users.len()
+    }
+
+    pub fn contains(&self, user: &str) -> bool {
+        self.users.contains_key(user)
+    }
+
+    pub fn list_users(&self) -> Vec<&User> {
+        self.users.values().collect()
+    }
+
+    pub fn add_user(&mut self, user: User) -> Result<(), String> {
+        if !is_valid_username(&user.user) {
+            return Err(format!("Nombre de usuario inválido: '{}'", user.user));
+        }
+        if self.users.contains_key(&user.user) {
+            return Err(format!("El usuario '{}' ya existe", user.user));
+        }
+        if self.users.values().any(|x| x.public_key.eq_ignore_ascii_case(&user.public_key)) {
+            return Err(format!("Clave pública repetida (usuario '{}')", user.user));
+        }
+        crate::crypto::validate_public_key_hex(&user.public_key)
+            .map_err(|e| format!("Usuario '{}': {}", user.user, e))?;
+        self.users.insert(user.user.clone(), user);
+        Ok(())
+    }
+
+    pub fn save(&self, path: &str) -> Result<(), String> {
+        let list: Vec<&User> = self.users.values().collect();
+        let json = serde_json::to_string_pretty(&list)
+            .map_err(|e| format!("Error al serializar usuarios: {}", e))?;
+        let tmp = format!("{}.tmp", path);
+        fs::write(&tmp, &json).map_err(|e| format!("Error al escribir {}: {}", tmp, e))?;
+        fs::rename(&tmp, path).map_err(|e| format!("Error al reemplazar {}: {}", path, e))?;
+        Ok(())
     }
 }
 
@@ -168,8 +209,12 @@ mod tests {
         assert!(can(Role::Reportante, Action::Enviar));
         assert!(!can(Role::Reportante, Action::ListarTodo));
         assert!(!can(Role::Reportante, Action::Validar));
+        assert!(!can(Role::Reportante, Action::Asignar));
+        assert!(!can(Role::Reportante, Action::Resolver));
         assert!(can(Role::Analista, Action::ListarTodo));
         assert!(can(Role::Analista, Action::Validar));
+        assert!(can(Role::Analista, Action::Asignar));
+        assert!(can(Role::Analista, Action::Resolver));
         assert!(can(Role::Admin, Action::Validar));
     }
 

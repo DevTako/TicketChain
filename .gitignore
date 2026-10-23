@@ -2,10 +2,7 @@
 keys/
 chain.json
 chain_v1_backup.json
-servidor.log
-*.tmp
-
-chain.json
-chain_v1_backup.json
+chain_tampered.json
+chain_ok.json
 servidor.log
 *.tmp

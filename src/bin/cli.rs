@@ -5,15 +5,19 @@ use std::time::Duration;
 
 use ticket_chain::auth::{is_valid_username, now_secs};
 use ticket_chain::crypto::{load_signing_key, random_nonce_hex, sign_hex, signed_message};
+use ticket_chain::paths;
 
-const SERVER_ADDR: &str = "127.0.0.1:7878";
 const MAX_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
 
 fn usage() -> ! {
-    eprintln!("Uso:");
-    eprintln!("  cargo run --bin cli -- <usuario> LISTAR");
-    eprintln!("  cargo run --bin cli -- <usuario> VALIDAR");
-    eprintln!("  cargo run --bin cli -- <usuario> ENVIAR \"<titulo>\" \"<descripcion>\" <severidad>");
+    eprintln!("Uso (cli <usuario> <comando> ...):");
+    eprintln!("  LISTAR");
+    eprintln!("  VALIDAR");
+    eprintln!("  ENVIAR \"<titulo>\" \"<descripcion>\" <severidad>");
+    eprintln!("  ASIGNAR <ticket_id>");
+    eprintln!("  RESOLVER <ticket_id> \"<nota>\"");
+    eprintln!("  CREAR_USUARIO <nombre> <reportante|analista|admin>   (solo admin)");
+    eprintln!("  LISTAR_USUARIOS                                       (solo admin)");
     eprintln!("Banderas de ataque (para demos): --replay | --forge | --stale");
     std::process::exit(2);
 }
@@ -23,10 +27,20 @@ fn fail(msg: &str) -> ! {
     std::process::exit(1);
 }
 
+fn parse_id(s: &str) -> u64 {
+    match s.parse() {
+        Ok(n) => n,
+        Err(_) => fail("El ticket_id debe ser un número."),
+    }
+}
+
 fn send_line(line: &str) -> Result<String, String> {
-    let addr: SocketAddr = SERVER_ADDR.parse().map_err(|e| format!("Dirección inválida: {}", e))?;
+    let addr_str = paths::server_addr();
+    let addr: SocketAddr = addr_str
+        .parse()
+        .map_err(|e| format!("Dirección inválida '{}': {}", addr_str, e))?;
     let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(3))
-        .map_err(|e| format!("No se pudo conectar al servidor: {}", e))?;
+        .map_err(|e| format!("No se pudo conectar al servidor ({}): {}", addr_str, e))?;
     stream.set_read_timeout(Some(Duration::from_secs(5))).map_err(|e| e.to_string())?;
     stream.set_write_timeout(Some(Duration::from_secs(5))).map_err(|e| e.to_string())?;
 
@@ -67,11 +81,33 @@ fn main() {
             json!({"cmd": "ENVIAR", "title": pos[2], "description": pos[3], "severity": pos[4]})
                 .to_string()
         }
+        "ASIGNAR" => {
+            if pos.len() != 3 {
+                usage();
+            }
+            json!({"cmd": "ASIGNAR", "ticket_id": parse_id(pos[2])}).to_string()
+        }
+        "RESOLVER" => {
+            if pos.len() != 4 {
+                usage();
+            }
+            json!({"cmd": "RESOLVER", "ticket_id": parse_id(pos[2]), "note": pos[3]}).to_string()
+        }
+        "CREAR_USUARIO" => {
+            if pos.len() != 4 {
+                usage();
+            }
+            json!({"cmd": "CREAR_USUARIO", "username": pos[2], "role": pos[3].to_lowercase()}).to_string()
+        }
+        "LISTAR_USUARIOS" => json!({"cmd": "LISTAR_USUARIOS"}).to_string(),
         _ => usage(),
     };
 
-    let signing_key = load_signing_key(&format!("keys/{}.key", user))
-        .unwrap_or_else(|e| fail(&e));
+    let key_file = paths::key_path(user);
+    let signing_key = match load_signing_key(&key_file) {
+        Ok(k) => k,
+        Err(e) => fail(&format!("No se pudo cargar la clave ({}): {}", key_file, e)),
+    };
 
     // --stale: firma con una marca de tiempo de hace 5 minutos.
     let ts = if flags.contains(&"--stale") {
@@ -79,7 +115,10 @@ fn main() {
     } else {
         now_secs()
     };
-    let nonce = random_nonce_hex().unwrap_or_else(|e| fail(&e));
+    let nonce = match random_nonce_hex() {
+        Ok(n) => n,
+        Err(e) => fail(&e),
+    };
     let signature = sign_hex(&signing_key, &signed_message(user, ts, &nonce, &payload));
 
     // --forge: firma un comando pero envía OTRO distinto.
