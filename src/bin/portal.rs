@@ -3,18 +3,22 @@ use eframe::egui;
 use serde::Deserialize;
 
 use ticket_chain::client::{format_utc, Session};
-use ticket_chain::{validate_command, Command, ALLOWED_SEVERITIES};
+use ticket_chain::{paths, server, validate_command, Command, ALLOWED_SEVERITIES};
 
 // Solo los campos que el portal muestra; serde ignora el resto.
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct TicketView {
     id: u64,
     title: String,
+    #[serde(default)]
+    description: String,
     severity: String,
     created_at: u64,
     status: String,
     reporter: String,
     assignee: Option<String>,
+    #[serde(default)]
+    resolved_by: Option<String>,
     resolution: Option<String>,
 }
 
@@ -41,7 +45,44 @@ struct UsersReply {
 #[derive(PartialEq)]
 enum Tab {
     Tickets,
+    Analista,
     Admin,
+}
+
+#[derive(PartialEq, Clone, Copy)]
+enum StatusFilter {
+    Todos,
+    SinAceptar, // abierto
+    EnProgreso, // asignado
+    Solucionado, // resuelto
+}
+
+fn status_display_name(status: &str) -> &'static str {
+    match status {
+        "abierto" => "Aún sin aceptar",
+        "asignado" => "En progreso",
+        "resuelto" => "Solucionado",
+        _ => "Desconocido",
+    }
+}
+
+fn status_color(status: &str) -> egui::Color32 {
+    match status {
+        "abierto" => egui::Color32::from_rgb(235, 175, 30), // Amarillo / naranja
+        "asignado" => egui::Color32::from_rgb(60, 160, 240), // Azul cielo
+        "resuelto" => egui::Color32::from_rgb(50, 205, 90),  // Verde
+        _ => egui::Color32::GRAY,
+    }
+}
+
+fn severity_color(severity: &str) -> egui::Color32 {
+    match severity {
+        "Crítica" => egui::Color32::from_rgb(230, 60, 60),
+        "Alta" => egui::Color32::from_rgb(240, 130, 30),
+        "Media" => egui::Color32::from_rgb(220, 190, 30),
+        "Baja" => egui::Color32::from_rgb(90, 170, 230),
+        _ => egui::Color32::GRAY,
+    }
 }
 
 struct PortalApp {
@@ -55,6 +96,13 @@ struct PortalApp {
     title: String,
     description: String,
     severity: String,
+
+    // Bandeja de analista
+    status_filter: StatusFilter,
+    analyst_search: String,
+    only_my_assigned: bool,
+    resolving_ticket_id: Option<u64>,
+    resolution_input: String,
 
     // Admin — Gestión de usuarios
     tab: Tab,
@@ -86,6 +134,11 @@ impl PortalApp {
             title: String::new(),
             description: String::new(),
             severity: ALLOWED_SEVERITIES[1].to_string(),
+            status_filter: StatusFilter::Todos,
+            analyst_search: String::new(),
+            only_my_assigned: false,
+            resolving_ticket_id: None,
+            resolution_input: String::new(),
             tab: Tab::Tickets,
             users: Vec::new(),
             new_username: String::new(),
@@ -103,6 +156,10 @@ impl PortalApp {
 
     fn is_admin(&self) -> bool {
         self.role == "admin"
+    }
+
+    fn is_analista(&self) -> bool {
+        self.role == "analista" || self.role == "admin"
     }
 
     // Pide al servidor los tickets que ESTA identidad puede ver.
@@ -147,6 +204,14 @@ impl PortalApp {
                             format!("Sesión iniciada como {} — {} tickets visibles", role_label, n),
                             false,
                         );
+
+                        // Si es analista o admin, abrir por defecto la bandeja de gestión de tickets
+                        if self.is_analista() {
+                            self.tab = Tab::Analista;
+                        } else {
+                            self.tab = Tab::Tickets;
+                        }
+
                         // Si es admin, cargar usuarios también.
                         if self.is_admin() {
                             let _ = self.fetch_users();
@@ -193,6 +258,60 @@ impl PortalApp {
                 }
             }
             Err(e) => self.note(e, true),
+        }
+    }
+
+    fn assign_ticket(&mut self, ticket_id: u64) {
+        let result = match &self.session {
+            Some(s) => s.asignar(ticket_id),
+            None => return,
+        };
+
+        match result {
+            Ok(_) => {
+                match self.fetch() {
+                    Ok(()) => self.note(
+                        format!("Ticket #{} aceptado con éxito. Estado: 'En progreso'", ticket_id),
+                        false,
+                    ),
+                    Err(e) => self.note(
+                        format!("Ticket #{} asignado, pero error al actualizar: {}", ticket_id, e),
+                        true,
+                    ),
+                }
+            }
+            Err(e) => self.note(format!("Error al aceptar ticket #{}: {}", ticket_id, e), true),
+        }
+    }
+
+    fn resolve_ticket(&mut self, ticket_id: u64, note: String) {
+        let trimmed_note = note.trim();
+        if trimmed_note.is_empty() {
+            self.note(String::from("La nota de solución no puede estar vacía"), true);
+            return;
+        }
+
+        let result = match &self.session {
+            Some(s) => s.resolver(ticket_id, trimmed_note),
+            None => return,
+        };
+
+        match result {
+            Ok(_) => {
+                self.resolving_ticket_id = None;
+                self.resolution_input.clear();
+                match self.fetch() {
+                    Ok(()) => self.note(
+                        format!("Ticket #{} marcado como 'Solucionado' con éxito", ticket_id),
+                        false,
+                    ),
+                    Err(e) => self.note(
+                        format!("Ticket #{} solucionado, pero error al actualizar: {}", ticket_id, e),
+                        true,
+                    ),
+                }
+            }
+            Err(e) => self.note(format!("Error al solucionar ticket #{}: {}", ticket_id, e), true),
         }
     }
 
@@ -267,6 +386,8 @@ impl PortalApp {
                     self.users.clear();
                     self.role.clear();
                     self.created_info = None;
+                    self.resolving_ticket_id = None;
+                    self.resolution_input.clear();
                     self.tab = Tab::Tickets;
                     self.message = String::from("Sesión cerrada");
                     self.is_error = false;
@@ -278,15 +399,30 @@ impl PortalApp {
             return;
         }
 
-        // Pestañas (solo mostrar Admin si es admin)
+        // Pestañas
         ui.separator();
         ui.horizontal(|ui| {
+            let tickets_title = if self.is_analista() {
+                "📝 Enviar reporte / Ver todos"
+            } else {
+                "📋 Mis reportes"
+            };
             if ui
-                .selectable_label(self.tab == Tab::Tickets, "📋 Tickets")
+                .selectable_label(self.tab == Tab::Tickets, tickets_title)
                 .clicked()
             {
                 self.tab = Tab::Tickets;
             }
+
+            if self.is_analista() {
+                if ui
+                    .selectable_label(self.tab == Tab::Analista, "📥 Bandeja de Analista")
+                    .clicked()
+                {
+                    self.tab = Tab::Analista;
+                }
+            }
+
             if self.is_admin() {
                 if ui
                     .selectable_label(self.tab == Tab::Admin, "⚙ Gestión de usuarios")
@@ -303,7 +439,369 @@ impl PortalApp {
 
         match self.tab {
             Tab::Tickets => self.tickets_view(ui),
+            Tab::Analista => {
+                if self.is_analista() {
+                    self.analyst_view(ui);
+                } else {
+                    self.tab = Tab::Tickets;
+                    self.tickets_view(ui);
+                }
+            }
             Tab::Admin => self.admin_view(ui),
+        }
+    }
+
+    fn analyst_view(&mut self, ui: &mut egui::Ui) {
+        let current_user = self
+            .session
+            .as_ref()
+            .map(|s| s.user.clone())
+            .unwrap_or_default();
+
+        ui.horizontal(|ui| {
+            ui.heading("📥 Bandeja de Tickets Recibidos");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("🔄 Actualizar tickets").clicked() {
+                    match self.fetch() {
+                        Ok(()) => {
+                            self.note(format!("{} tickets cargados", self.tickets.len()), false);
+                        }
+                        Err(e) => self.note(e, true),
+                    }
+                }
+            });
+        });
+
+        ui.label(
+            "Visualice y gestione los tickets enviados por los reportantes. Controle el estado de cada ticket: Aún sin aceptar → En progreso → Solucionado.",
+        );
+        ui.add_space(6.0);
+
+        // Contadores
+        let total_count = self.tickets.len();
+        let sin_aceptar_count = self.tickets.iter().filter(|t| t.status == "abierto").count();
+        let en_progreso_count = self.tickets.iter().filter(|t| t.status == "asignado").count();
+        let solucionado_count = self.tickets.iter().filter(|t| t.status == "resuelto").count();
+
+        // Barra de botones de filtro por estado
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Estado:").strong());
+
+            let all_label = format!("Todos ({})", total_count);
+            if ui
+                .selectable_label(self.status_filter == StatusFilter::Todos, all_label)
+                .clicked()
+            {
+                self.status_filter = StatusFilter::Todos;
+            }
+
+            let sin_aceptar_label = format!("🟡 Aún sin aceptar ({})", sin_aceptar_count);
+            if ui
+                .selectable_label(
+                    self.status_filter == StatusFilter::SinAceptar,
+                    sin_aceptar_label,
+                )
+                .clicked()
+            {
+                self.status_filter = StatusFilter::SinAceptar;
+            }
+
+            let en_progreso_label = format!("🔵 En progreso ({})", en_progreso_count);
+            if ui
+                .selectable_label(
+                    self.status_filter == StatusFilter::EnProgreso,
+                    en_progreso_label,
+                )
+                .clicked()
+            {
+                self.status_filter = StatusFilter::EnProgreso;
+            }
+
+            let solucionado_label = format!("🟢 Solucionado ({})", solucionado_count);
+            if ui
+                .selectable_label(
+                    self.status_filter == StatusFilter::Solucionado,
+                    solucionado_label,
+                )
+                .clicked()
+            {
+                self.status_filter = StatusFilter::Solucionado;
+            }
+        });
+
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label("🔍 Buscar:");
+            ui.text_edit_singleline(&mut self.analyst_search);
+            if !self.analyst_search.is_empty() && ui.button("✖").clicked() {
+                self.analyst_search.clear();
+            }
+            ui.separator();
+            ui.checkbox(&mut self.only_my_assigned, "Solo mis tickets asignados");
+        });
+
+        ui.separator();
+
+        let search_query = self.analyst_search.trim().to_lowercase();
+        let filtered_tickets: Vec<&TicketView> = self
+            .tickets
+            .iter()
+            .filter(|t| {
+                // Filtro por estado
+                let status_match = match self.status_filter {
+                    StatusFilter::Todos => true,
+                    StatusFilter::SinAceptar => t.status == "abierto",
+                    StatusFilter::EnProgreso => t.status == "asignado",
+                    StatusFilter::Solucionado => t.status == "resuelto",
+                };
+                if !status_match {
+                    return false;
+                }
+
+                // Filtro solo mis asignados
+                if self.only_my_assigned && t.assignee.as_deref() != Some(&current_user) {
+                    return false;
+                }
+
+                // Filtro de búsqueda textual
+                if !search_query.is_empty() {
+                    let id_str = t.id.to_string();
+                    let match_id = id_str.contains(&search_query);
+                    let match_title = t.title.to_lowercase().contains(&search_query);
+                    let match_rep = t.reporter.to_lowercase().contains(&search_query);
+                    let match_desc = t.description.to_lowercase().contains(&search_query);
+                    if !match_id && !match_title && !match_rep && !match_desc {
+                        return false;
+                    }
+                }
+
+                true
+            })
+            .collect();
+
+        if filtered_tickets.is_empty() {
+            ui.add_space(20.0);
+            ui.vertical_centered(|ui| {
+                ui.label(
+                    egui::RichText::new("No hay tickets que coincidan con los filtros actuales.")
+                        .italics()
+                        .size(14.0),
+                );
+            });
+            return;
+        }
+
+        // Listado de tickets
+        let mut assign_target_id = None;
+        let mut start_resolving_id = None;
+        let mut cancel_resolving = false;
+        let mut finish_resolve_data = None;
+
+        egui::ScrollArea::vertical()
+            .id_salt("scroll_analyst_tickets")
+            .show(ui, |ui| {
+                for t in &filtered_tickets {
+                    ui.group(|ui| {
+                        ui.set_width(ui.available_width());
+
+                        // Fila superior: ID, severidad, reportante, fecha y badge de estado
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!("#{}", t.id))
+                                    .strong()
+                                    .size(15.0),
+                            );
+                            ui.colored_label(
+                                severity_color(&t.severity),
+                                format!("● Severidad: {}", t.severity),
+                            );
+                            ui.separator();
+                            ui.label(format!("👤 Reportante: {}", t.reporter));
+                            ui.separator();
+                            ui.label(format!("🕒 {}", format_utc(t.created_at)));
+
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let badge_label = format!("● {}", status_display_name(&t.status));
+                                    ui.colored_label(
+                                        status_color(&t.status),
+                                        egui::RichText::new(badge_label).strong().size(13.0),
+                                    );
+                                },
+                            );
+                        });
+
+                        ui.add_space(4.0);
+                        // Título
+                        ui.label(egui::RichText::new(&t.title).strong().size(14.0));
+
+                        // Descripción completa si existe
+                        if !t.description.is_empty() {
+                            ui.add_space(2.0);
+                            ui.label(
+                                egui::RichText::new(&t.description)
+                                    .color(egui::Color32::from_gray(210)),
+                            );
+                        }
+
+                        // Asignación
+                        if let Some(assignee) = &t.assignee {
+                            ui.add_space(2.0);
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("Asignado a:").italics());
+                                if assignee == &current_user {
+                                    ui.label(
+                                        egui::RichText::new(format!("{} (Tú)", assignee))
+                                            .color(egui::Color32::from_rgb(80, 180, 255))
+                                            .strong(),
+                                    );
+                                } else {
+                                    ui.label(
+                                        egui::RichText::new(assignee)
+                                            .color(egui::Color32::from_gray(180)),
+                                    );
+                                }
+                            });
+                        }
+
+                        // Resolución si está solucionado
+                        if t.status == "resuelto" {
+                            ui.add_space(4.0);
+                            ui.group(|ui| {
+                                ui.set_width(ui.available_width());
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new("💡 Solución aplicada:")
+                                            .strong()
+                                            .color(egui::Color32::from_rgb(60, 205, 100)),
+                                    );
+                                    if let Some(by) = &t.resolved_by {
+                                        ui.label(format!("(Resuelto por: {})", by));
+                                    }
+                                });
+                                ui.label(
+                                    t.resolution
+                                        .as_deref()
+                                        .unwrap_or("Sin nota de resolución registrada."),
+                                );
+                            });
+                        }
+
+                        // Zona de acciones de cambio de estado
+                        ui.add_space(6.0);
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            match t.status.as_str() {
+                                "abierto" => {
+                                    if t.reporter == current_user {
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "⚠ Principio de 4 ojos: No puedes autoasignarte un ticket que reportaste tú mismo.",
+                                            )
+                                            .color(egui::Color32::from_rgb(255, 175, 40))
+                                            .italics(),
+                                        );
+                                    } else {
+                                        if ui
+                                            .button(
+                                                egui::RichText::new(
+                                                    "✋ Aceptar ticket y poner 'En progreso'",
+                                                )
+                                                .strong(),
+                                            )
+                                            .clicked()
+                                        {
+                                            assign_target_id = Some(t.id);
+                                        }
+                                    }
+                                }
+                                "asignado" => {
+                                    if t.assignee.as_deref() == Some(&current_user) {
+                                        if self.resolving_ticket_id == Some(t.id) {
+                                            ui.vertical(|ui| {
+                                                ui.label(
+                                                    egui::RichText::new(
+                                                        "📝 Escriba la solución aplicada para cerrar el ticket:",
+                                                    )
+                                                    .strong(),
+                                                );
+                                                ui.text_edit_multiline(&mut self.resolution_input);
+                                                ui.horizontal(|ui| {
+                                                    if ui
+                                                        .button(
+                                                            egui::RichText::new(
+                                                                "✅ Confirmar y marcar como 'Solucionado'",
+                                                            )
+                                                            .strong(),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        finish_resolve_data = Some((
+                                                            t.id,
+                                                            self.resolution_input.clone(),
+                                                        ));
+                                                    }
+                                                    if ui.button("Cancelar").clicked() {
+                                                        cancel_resolving = true;
+                                                    }
+                                                });
+                                            });
+                                        } else {
+                                            if ui
+                                                .button(
+                                                    egui::RichText::new(
+                                                        "✅ Resolver y marcar como 'Solucionado'",
+                                                    )
+                                                    .strong(),
+                                                )
+                                                .clicked()
+                                            {
+                                                start_resolving_id = Some(t.id);
+                                            }
+                                        }
+                                    } else {
+                                        let who = t.assignee.as_deref().unwrap_or("otro analista");
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "En atención por {}. Solo el analista asignado puede resolverlo.",
+                                                who
+                                            ))
+                                            .italics()
+                                            .color(egui::Color32::from_gray(160)),
+                                        );
+                                    }
+                                }
+                                "resuelto" => {
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "✔ Ticket solucionado satisfactoriamente y sellado en blockchain.",
+                                        )
+                                        .color(egui::Color32::from_rgb(70, 205, 100))
+                                        .italics(),
+                                    );
+                                }
+                                _ => {}
+                            }
+                        });
+                    });
+                    ui.add_space(6.0);
+                }
+            });
+
+        if let Some(id) = assign_target_id {
+            self.assign_ticket(id);
+        }
+        if let Some(id) = start_resolving_id {
+            self.resolving_ticket_id = Some(id);
+            self.resolution_input.clear();
+        }
+        if cancel_resolving {
+            self.resolving_ticket_id = None;
+            self.resolution_input.clear();
+        }
+        if let Some((id, note)) = finish_resolve_data {
+            self.resolve_ticket(id, note);
         }
     }
 
@@ -349,11 +847,22 @@ impl PortalApp {
 
         // Título de la tabla según rol
         let table_title = if self.is_admin() || self.role == "analista" {
-            "Todos los tickets"
+            "Todos los tickets registrados"
         } else {
             "Mis reportes"
         };
-        ui.label(egui::RichText::new(table_title).strong());
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(table_title).strong());
+            if self.is_analista() {
+                ui.label(
+                    egui::RichText::new(
+                        "(Para atender, asignar y solucionar tickets, use la pestaña '📥 Bandeja de Analista')",
+                    )
+                    .color(egui::Color32::from_rgb(80, 180, 255))
+                    .italics(),
+                );
+            }
+        });
 
         egui::ScrollArea::vertical().show(ui, |ui| {
             egui::Grid::new("mis_tickets")
@@ -372,9 +881,9 @@ impl PortalApp {
                         ui.label(t.id.to_string());
                         ui.label(format_utc(t.created_at));
                         ui.label(&t.title);
-                        ui.label(&t.severity);
+                        ui.colored_label(severity_color(&t.severity), &t.severity);
                         ui.label(&t.reporter);
-                        ui.label(&t.status);
+                        ui.colored_label(status_color(&t.status), status_display_name(&t.status));
                         ui.label(t.assignee.as_deref().unwrap_or("-"));
                         ui.label(t.resolution.as_deref().unwrap_or("-"));
                         ui.end_row();
@@ -502,9 +1011,21 @@ impl eframe::App for PortalApp {
 }
 
 fn main() -> eframe::Result<()> {
+    paths::ensure_environment();
+    server::ensure_server_running(
+        &paths::server_bind(),
+        &paths::data_path("chain.json"),
+        &paths::data_path("users.json"),
+    );
+
+    let mut options = eframe::NativeOptions::default();
+    options.viewport = egui::ViewportBuilder::default()
+        .with_inner_size([1020.0, 720.0])
+        .with_min_inner_size([820.0, 520.0]);
+
     eframe::run_native(
         "Portal de reportes — Ticket Chain",
-        eframe::NativeOptions::default(),
+        options,
         Box::new(|cc| Ok(Box::new(PortalApp::new(cc)))),
     )
 }
