@@ -1,6 +1,5 @@
-========================================================================
-             TICKET CHAIN - SISTEMA DE CADENA DE CUSTODIA
-========================================================================
+TICKET CHAIN - SISTEMA DE CADENA DE CUSTODIA
+
 
 INSTRUCCIONES DE USO:
 --------------------
