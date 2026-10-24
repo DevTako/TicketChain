@@ -1,1 +1,28 @@
-# TicketChain
+========================================================================
+             TICKET CHAIN - SISTEMA DE CADENA DE CUSTODIA
+========================================================================
+
+INSTRUCCIONES DE USO:
+--------------------
+Solo tienes que hacer DOBLE CLIC sobre:
+   ==> TicketChain.exe <==
+
+Â¡Eso es todo!
+- No requiere abrir consolas ni scripts.
+- Si el servidor no esta activo, lo inicia automaticamente en segundo plano.
+- Abre directamente la interfaz grafica de usuario.
+
+ROLES Y CUENTAS INCLUIDAS:
+--------------------------
+1. 'admin'   : Acceso completo y pestana 'Gestion de usuarios' para crear
+               nuevas cuentas de empleados con 1 clic (genera su par de claves).
+2. 'walter'  : Rol reportante (solo ve sus propios tickets en 'Mis reportes').
+3. 'ana'     : Rol analista (atiende, asigna y resuelve tickets).
+
+HERRAMIENTAS AUXILIARES (OPCIONALES):
+------------------------------------
+- audit.exe  : Ejecutalo en cualquier momento para verificar la integridad
+               matematica de la cadena de bloques offline.
+- cli.exe    : Para interactuar por linea de comandos.
+- attack.exe : Para demostrar la deteccion de fraudes o alteraciones.
+========================================================================
