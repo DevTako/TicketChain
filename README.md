@@ -6,7 +6,7 @@ INSTRUCCIONES DE USO:
 Solo tienes que hacer DOBLE CLIC sobre:
    ==> TicketChain.exe <==
 
-Â¡Eso es todo!
+¡Eso es todo!
 - No requiere abrir consolas ni scripts.
 - Si el servidor no esta activo, lo inicia automaticamente en segundo plano.
 - Abre directamente la interfaz grafica de usuario.
@@ -24,4 +24,4 @@ HERRAMIENTAS AUXILIARES (OPCIONALES):
                matematica de la cadena de bloques offline.
 - cli.exe    : Para interactuar por linea de comandos.
 - attack.exe : Para demostrar la deteccion de fraudes o alteraciones.
-========================================================================
+
